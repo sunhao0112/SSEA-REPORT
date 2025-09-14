@@ -15,7 +15,7 @@ from services.file_service import FileService
 from services.dify_service import DifyService
 from services.report_service import ReportService
 from services.database_service import DatabaseService
-# from services.file_security import FileSecurityValidator  # 临时注释
+from services.file_security import FileSecurityValidator  # 临时注释
 from services.cache_service import cache_manager
 from services.cleanup_service import cleanup_service
 from services.logger_config import (
@@ -144,6 +144,18 @@ dify_service = DifyService(api_key=DIFY_API_KEY, base_url=DIFY_BASE_URL)
 
 @app.get("/")
 async def root():
+    """根路径：返回前端页面或API信息"""
+    static_dir = "/app/static"
+    if os.path.exists(static_dir):
+        # 如果有静态文件，返回前端页面
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            from fastapi.responses import HTMLResponse
+            with open(index_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return HTMLResponse(content=content)
+
+    # 否则返回API信息
     system_logger.info("访问根路径")
     return {"message": "南海舆情日报生成系统 API", "status": "running", "version": "1.0.0"}
 
@@ -625,16 +637,41 @@ async def download_report(upload_id: int):
 # 挂载静态文件目录（前端） - 必须在所有API路由之后
 static_dir = "/app/static"
 if os.path.exists(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    # 挂载静态资源目录
+    app.mount("/assets", StaticFiles(directory=f"{static_dir}/assets"), name="assets")
+    # 挂载其他静态文件（如vite.svg等）
+    app.mount("/static", StaticFiles(directory=static_dir), name="static_files")
+
+    # 处理SPA路由的catchall路由
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """服务单页应用，对所有非API路径返回index.html"""
+        # 如果是API路径，跳过处理
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
+
+        # 如果是静态文件路径，跳过处理
+        if full_path.startswith(("assets/", "static/")):
+            raise HTTPException(status_code=404, detail="Static file not found")
+
+        # 检查是否是根目录的静态文件（如vite.svg, favicon.ico等）
+        static_file_path = os.path.join(static_dir, full_path)
+        if os.path.exists(static_file_path) and os.path.isfile(static_file_path):
+            return FileResponse(static_file_path)
+
+        # 否则返回index.html（SPA路由处理）
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            from fastapi.responses import HTMLResponse
+            with open(index_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return HTMLResponse(content=content)
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not found")
+
     system_logger.info("前端静态文件已挂载: /app/static")
 else:
-    # 尝试本地静态文件目录（开发模式）
-    local_static_dir = "./static"
-    if os.path.exists(local_static_dir):
-        app.mount("/", StaticFiles(directory=local_static_dir, html=True), name="static")
-        system_logger.info("前端静态文件已挂载: ./static")
-    else:
-        system_logger.warning("未找到前端静态文件目录，只提供API服务")
+    system_logger.warning("未找到前端静态文件目录，只提供API服务")
 
 if __name__ == "__main__":
     import multiprocessing
