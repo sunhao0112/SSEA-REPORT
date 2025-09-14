@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  # 南海舆情报告生成系统 - 主应用
+  nanhai-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nanhai-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 基础配置
+      - PYTHONUNBUFFERED=1
+      - LC_ALL=C.UTF-8
+      - LANG=C.UTF-8
+
+      # 数据库配置 (Supabase)
+      - SUPABASE_URL=${SUPABASE_URL:-your_supabase_url}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-your_supabase_key}
+
+      # Dify AI配置
+      - DIFY_API_KEY=${DIFY_API_KEY:-app-your-api-key-here}
+      - DIFY_BASE_URL=${DIFY_BASE_URL:-https://api.dify.ai/v1}
+
+      # 存储目录配置
+      - UPLOAD_DIR=/app/uploads
+      - REPORTS_DIR=/app/reports
+      - TEMPLATES_DIR=/app/templates
+      - LOGS_DIR=/app/logs
+      - CACHE_DIR=/app/cache
+
+      # CORS配置
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000,http://localhost:8080}
+
+      # 应用配置
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+    volumes:
+      # 持久化存储
+      - nanhai_uploads:/app/uploads
+      - nanhai_reports:/app/reports
+      - nanhai_logs:/app/logs
+      - nanhai_cache:/app/cache
+
+      # 配置文件（可选）
+      - ./backend/.env:/app/.env:ro
+      - ./template.docx:/app/templates/template.docx:ro
+
+    networks:
+      - nanhai-network
+
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # 资源限制
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Nginx反向代理（可选）
+  nginx:
+    image: nginx:alpine
+    container_name: nanhai-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - nanhai-app
+    networks:
+      - nanhai-network
+    profiles:
+      - with-nginx
+
+# 数据卷
+volumes:
+  nanhai_uploads:
+    driver: local
+  nanhai_reports:
+    driver: local
+  nanhai_logs:
+    driver: local
+  nanhai_cache:
+    driver: local
+  nginx_logs:
+    driver: local
+
+# 网络
+networks:
+  nanhai-network:
+    driver: bridge
