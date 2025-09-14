@@ -30,7 +30,7 @@ class UploadRecord(BaseModel):
     async def get_by_id(cls, upload_id: int) -> Optional["UploadRecord"]:
         """根据ID获取上传记录"""
         data = await db_service.get_data("upload_records", {"id": upload_id})
-        if data:
+        if data and len(data) > 0:
             return cls(**data[0])
         return None
 
@@ -84,7 +84,7 @@ class ProcessingStatus(BaseModel):
     async def get_by_id(cls, processing_id: int) -> Optional["ProcessingStatus"]:
         """根据处理状态ID获取处理状态"""
         data = await db_service.get_data("processing_status", {"id": processing_id})
-        if data:
+        if data and len(data) > 0:
             return cls(**data[0])
         return None
 
@@ -195,6 +195,6 @@ class ReportGeneration(BaseModel):
     async def get_by_upload_id(cls, upload_id: int) -> Optional["ReportGeneration"]:
         """根据上传ID获取报告生成记录"""
         data = await db_service.get_data("report_generations", {"upload_id": upload_id})
-        if data:
+        if data and len(data) > 0:
             return cls(**data[0])
         return None

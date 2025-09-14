@@ -38,7 +38,7 @@ class SupabaseService:
         """插入数据"""
         try:
             response = self.client.table(table).insert(data).execute()
-            return response.data[0] if response.data else None
+            return response.data[0] if response.data and len(response.data) > 0 else None
         except Exception as e:
             print(f"数据插入失败: {str(e)}")
             raise e
@@ -63,7 +63,7 @@ class SupabaseService:
             for key, value in filters.items():
                 query = query.eq(key, value)
             response = query.execute()
-            return response.data[0] if response.data else None
+            return response.data[0] if response.data and len(response.data) > 0 else None
         except Exception as e:
             print(f"数据更新失败: {str(e)}")
             raise e

@@ -146,9 +146,9 @@ class FileService:
     def clean_data(self, raw_data: List[Dict[str, Any]]) -> List[RawDataItem]:
         """清洗数据，只保留需要的字段"""
         try:
-            if not raw_data:
+            if not raw_data or len(raw_data) == 0:
                 return []
-            
+
             # 获取第一行数据来检查列名
             first_row = raw_data[0]
             column_mapping = {}

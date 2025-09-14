@@ -541,7 +541,9 @@ async def process_file_background(upload_id: int, processing_id: int, file_path:
         file_logger.info(f"文件处理完成: {filename}", upload_id=upload_id)
 
     except Exception as e:
+        import traceback
         file_logger.error(f"处理文件时发生错误: {str(e)}", upload_id=upload_id, error=str(e))
+        file_logger.error(f"完整错误堆栈: {traceback.format_exc()}", upload_id=upload_id)
 
         # 清理临时文件（如果存在）
         try:
