@@ -474,11 +474,15 @@ async def process_file_background(upload_id: int, processing_id: int, file_path:
         # 提取境内外数据源
         domestic_sources, foreign_sources = dify_service.extract_sources_from_result(workflow_result)
 
+        # 确保数据源不是None，如果是None则使用空列表
+        if domestic_sources is None:
+            domestic_sources = []
+        if foreign_sources is None:
+            foreign_sources = []
+
         # 暂时放宽验证条件，避免因Dify模型过载导致的失败
         if not domestic_sources and not foreign_sources:
             file_logger.warning("⚠️ Dify返回空数据（可能是模型过载），使用空数据继续流程", upload_id=upload_id)
-            domestic_sources = []
-            foreign_sources = []
 
         await db_service.update_processing_status(processing_id, "workflow", "processing", 80.0, "数据分离和AI分析完成")
 
@@ -494,7 +498,7 @@ async def process_file_background(upload_id: int, processing_id: int, file_path:
         outside_count = 0  # 语言不包含Chinese的数量
 
         for data in raw_data_list:
-            if data.language:
+            if data.language and data.language.strip():
                 language = data.language.strip()
                 if "Chinese" in language:
                     inside_count += 1

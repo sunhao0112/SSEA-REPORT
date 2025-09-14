@@ -282,7 +282,7 @@ class FileService:
                             'index': i + 1,
                             'sentence': cleaned_sentence[:80] + '...' if len(cleaned_sentence) > 80 else cleaned_sentence,
                             'url': item.url,
-                            'title': item.title[:40] + '...' if item.title and len(item.title) > 40 else item.title
+                            'title': (item.title[:40] + '...' if len(item.title) > 40 else item.title) if item.title else "无标题"
                         })
             else:
                 # 如果没有命中句子，保留该条目
@@ -347,8 +347,11 @@ class FileService:
             for sentence, count in most_duplicated:
                 if count > 1:
                     example = sentence_examples[sentence]
-                    logger.info(f"   重复 {count} 次: {sentence[:80]}...")
-                    logger.info(f"      来源: {example['source']} | 标题: {example['title'][:40]}...")
+                    sentence_text = sentence[:80] if sentence else "无句子内容"
+                    logger.info(f"   重复 {count} 次: {sentence_text}...")
+                    title_text = example['title'][:40] if example['title'] else "无标题"
+                    source_text = example['source'] if example['source'] else "未知来源"
+                    logger.info(f"      来源: {source_text} | 标题: {title_text}...")
 
         analysis = {
             'total_items': len(data),
@@ -362,7 +365,7 @@ class FileService:
             if count > 1:
                 example = sentence_examples[sentence]
                 analysis['most_duplicated'].append({
-                    'sentence': sentence[:100] + '...' if len(sentence) > 100 else sentence,
+                    'sentence': (sentence[:100] + '...' if len(sentence) > 100 else sentence) if sentence else "无句子内容",
                     'count': count,
                     'first_occurrence': example['first_occurrence'],
                     'title': example['title'],
