@@ -246,16 +246,32 @@ class DifyService:
     def extract_sources_from_result(self, workflow_result: Dict[Any, Any]) -> Tuple[Optional[list], Optional[list]]:
         """从工作流结果中提取境内外数据源"""
         try:
-            data = workflow_result.get('data', {})
-            outputs = data.get('outputs', {})
-            structured_output = outputs.get('structured_output', {})
+            # 安全地检查每一级是否存在
+            if not workflow_result:
+                logger.error("❌ workflow_result 为空")
+                return None, None
+
+            data = workflow_result.get('data')
+            if not data:
+                logger.error("❌ workflow_result 中没有 'data' 字段")
+                return None, None
+
+            outputs = data.get('outputs')
+            if not outputs:
+                logger.error("❌ data 中没有 'outputs' 字段")
+                return None, None
+
+            structured_output = outputs.get('structured_output')
+            if not structured_output:
+                logger.error("❌ outputs 中没有 'structured_output' 字段")
+                return None, None
 
             domestic_sources = structured_output.get('domestic_sources', [])
             foreign_sources = structured_output.get('foreign_sources', [])
 
             logger.info(f"✅ 数据提取成功:")
-            logger.info(f"- 境内条目数: {len(domestic_sources)}")
-            logger.info(f"- 境外条目数: {len(foreign_sources)}")
+            logger.info(f"- 境内条目数: {len(domestic_sources) if domestic_sources else 0}")
+            logger.info(f"- 境外条目数: {len(foreign_sources) if foreign_sources else 0}")
 
             return domestic_sources, foreign_sources
 
