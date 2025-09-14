@@ -101,7 +101,7 @@ async def log_requests(request: Request, call_next):
 # 配置CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://localhost:5174').split(','),
+    allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://localhost:5174,http://82.157.4.192:8000').split(','),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -144,19 +144,18 @@ dify_service = DifyService(api_key=DIFY_API_KEY, base_url=DIFY_BASE_URL)
 
 @app.get("/")
 async def root():
-    """根路径：返回前端页面或API信息"""
+    """根路径：返回前端页面"""
     static_dir = "/app/static"
-    if os.path.exists(static_dir):
-        # 如果有静态文件，返回前端页面
-        index_path = os.path.join(static_dir, "index.html")
-        if os.path.exists(index_path):
-            from fastapi.responses import HTMLResponse
-            with open(index_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            return HTMLResponse(content=content)
+    index_path = os.path.join(static_dir, "index.html")
 
-    # 否则返回API信息
-    system_logger.info("访问根路径")
+    if os.path.exists(index_path):
+        from fastapi.responses import HTMLResponse
+        with open(index_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+
+    # 如果没有前端文件，返回API信息
+    system_logger.info("访问根路径 - 未找到前端文件")
     return {"message": "南海舆情日报生成系统 API", "status": "running", "version": "1.0.0"}
 
 @app.get("/api/health")

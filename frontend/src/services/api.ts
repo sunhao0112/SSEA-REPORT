@@ -1,5 +1,5 @@
 // API服务配置
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = window.location.origin;
 
 export interface UploadResponse {
   upload_id: number;
