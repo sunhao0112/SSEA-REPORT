@@ -1,10 +1,15 @@
 from models import UploadRecord, ProcessingStatus, RawData, ProcessedData, ReportGeneration
 from schemas import RawDataItem, UploadHistoryResponse, UploadHistoryItem
+from services.cache_service import cache_manager, cached
+from services.logger_config import get_logger
 from typing import List, Optional
 from datetime import datetime
 import json
 import pandas as pd
 import numpy as np
+
+# 初始化日志
+db_logger = get_logger("database")
 
 def clean_for_json(value):
     """清理数据值以确保JSON兼容性"""
@@ -87,15 +92,11 @@ class DatabaseService:
             update_data["error_message"] = error_message
 
         if update_data:
-            # 添加调试日志
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"更新处理状态 - processing_id: {processing_id}, 更新数据: {update_data}")
+            # 只在状态变化或错误时记录日志
+            if (status and status != processing_status.status) or error_message:
+                db_logger.info(f"状态更新 - processing_id: {processing_id}, step={update_data.get('current_step', processing_status.current_step)}, status={update_data.get('status', processing_status.status)}, progress={update_data.get('progress', processing_status.progress)}")
 
             result = await processing_status.update(update_data)
-
-            logger.info(f"状态更新成功 - processing_id: {processing_id}, 新状态: step={result.current_step}, status={result.status}, progress={result.progress}")
-
             return result
 
         return processing_status
@@ -185,8 +186,9 @@ class DatabaseService:
 
         return report_generation
 
+    @cached(cache_type="db", ttl=300)
     async def get_upload_history(self, limit: int = 50, offset: int = 0) -> UploadHistoryResponse:
-        """获取上传历史记录"""
+        """获取上传历史记录 - 带缓存"""
 
         # 查询所有记录（注意：实际应用中需要分页）
         records = await UploadRecord.get_all()
@@ -246,8 +248,9 @@ class DatabaseService:
             "foreign_sources": foreign_sources
         }
 
+    @cached(cache_type="db", ttl=120)
     async def get_data_stats(self, upload_id: int) -> dict:
-        """获取数据统计信息"""
+        """获取数据统计信息 - 带缓存"""
 
         # 原始数据统计
         raw_data_list = await RawData.get_by_upload_id(upload_id)

@@ -174,13 +174,17 @@ class DifyService:
                                             if event == 'node_started':
                                                 node_data = chunk_data.get('data', {})
                                                 node_title = node_data.get('title', '未知节点')
-                                                logger.info(f"  🔸 开始处理: {node_title}")
+                                                # 只记录关键节点
+                                                if 'LLM' in node_title or '文档' in node_title:
+                                                    logger.info(f"  🔸 开始处理: {node_title}")
                                                 total_nodes += 1
 
                                             elif event == 'node_finished':
                                                 node_data = chunk_data.get('data', {})
                                                 node_title = node_data.get('title', '未知节点')
-                                                logger.info(f"  ✅ 完成处理: {node_title}")
+                                                # 只记录关键节点
+                                                if 'LLM' in node_title or '文档' in node_title:
+                                                    logger.info(f"  ✅ 完成处理: {node_title}")
                                                 completed_nodes += 1
 
                                             elif event == 'workflow_finished':

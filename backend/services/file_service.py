@@ -243,8 +243,8 @@ class FileService:
     
     async def deduplicate_data(self, data: List[RawDataItem]) -> List[RawDataItem]:
         """基于命中句子进行去重"""
-        import logging
-        logger = logging.getLogger(__name__)
+        from services.logger_config import get_logger
+        logger = get_logger("file")
 
         # 记录去重前的统计信息
         original_count = len(data)
@@ -254,15 +254,6 @@ class FileService:
         has_sentence_count = sum(1 for item in data if item.hit_sentence)
         no_sentence_count = original_count - has_sentence_count
         logger.info(f"📈 数据分布 - 有命中句子: {has_sentence_count} 条，无命中句子: {no_sentence_count} 条")
-
-        # 调试：打印前5个命中句子样例
-        logger.info("🔍 前5个命中句子样例:")
-        for i, item in enumerate(data[:5]):
-            if item.hit_sentence:
-                sentence_preview = item.hit_sentence.strip()[:100] + '...' if len(item.hit_sentence.strip()) > 100 else item.hit_sentence.strip()
-                logger.info(f"   {i+1}. 长度:{len(item.hit_sentence.strip())} - {sentence_preview}")
-            else:
-                logger.info(f"   {i+1}. [空命中句子] - 标题: {item.title}")
 
         seen_sentences = set()
         deduped_data = []
@@ -285,14 +276,13 @@ class FileService:
                 else:
                     # 记录重复数据
                     duplicate_count += 1
-                    # 保存前5个重复样例用于日志展示
-                    if len(duplicate_examples) < 5:
+                    # 保存前3个重复样例用于日志展示
+                    if len(duplicate_examples) < 3:
                         duplicate_examples.append({
                             'index': i + 1,
-                            'sentence': cleaned_sentence[:100] + '...' if len(cleaned_sentence) > 100 else cleaned_sentence,
-                            'sentence_length': len(cleaned_sentence),
+                            'sentence': cleaned_sentence[:80] + '...' if len(cleaned_sentence) > 80 else cleaned_sentence,
                             'url': item.url,
-                            'title': item.title[:50] + '...' if item.title and len(item.title) > 50 else item.title
+                            'title': item.title[:40] + '...' if item.title and len(item.title) > 40 else item.title
                         })
             else:
                 # 如果没有命中句子，保留该条目
@@ -305,25 +295,20 @@ class FileService:
 
         logger.info(f"✅ 去重处理完成 - 最终数据行数: {final_count}")
         logger.info(f"🗑️  去重统计 - 移除重复数据: {removed_count} 条 ({removed_count/original_count*100:.1f}%)")
-        logger.info(f"🔢 唯一命中句子数量: {unique_sentences}")
-        logger.info(f"📋 清理后为空的命中句子: {empty_sentence_count} 条")
-        logger.info(f"📋 保留数据构成 - 有效命中句子: {unique_sentences} 条，空命中句子: {empty_sentence_count} 条，无命中句子: {no_sentence_count} 条")
 
-        # 输出重复样例
+        # 显示重复数据样例（减少日志量）
         if duplicate_examples:
             logger.info(f"🔍 重复数据样例 ({len(duplicate_examples)} 个示例):")
             for example in duplicate_examples:
-                logger.info(f"   第{example['index']}行 - 长度:{example['sentence_length']} - {example['sentence']}")
-                logger.info(f"      标题: {example['title'] or '无标题'}")
-                logger.info(f"      URL: {example['url'] or '无URL'}")
+                logger.info(f"   第{example['index']}行 - {example['sentence'][:60]}...")
 
         return deduped_data
 
     def analyze_hit_sentences(self, data: List[RawDataItem]) -> dict:
         """分析命中句子的分布情况，用于调试去重问题"""
-        import logging
+        from services.logger_config import get_logger
         from collections import Counter
-        logger = logging.getLogger(__name__)
+        logger = get_logger("file")
 
         sentence_counts = Counter()
         sentence_examples = {}
@@ -346,8 +331,24 @@ class FileService:
         total_sentences = len([item for item in data if item.hit_sentence])
         unique_sentences = len(sentence_counts)
 
-        # 找出重复次数最多的句子
-        most_duplicated = sentence_counts.most_common(10)
+        # 找出重复次数最多的句子（减少显示数量）
+        most_duplicated = sentence_counts.most_common(3)
+
+        # 只记录重要的分析信息
+        logger.info(f"📊 命中句子分析结果:")
+        logger.info(f"   总数据条数: {len(data)}")
+        logger.info(f"   有命中句子的条数: {total_sentences}")
+        logger.info(f"   唯一命中句子数: {unique_sentences}")
+        logger.info(f"   预期去重率: {(total_sentences - unique_sentences) / total_sentences * 100:.1f}%")
+
+        # 显示重复次数最多的句子（减少数量）
+        if most_duplicated:
+            logger.info(f"🔍 重复次数最多的命中句子:")
+            for sentence, count in most_duplicated:
+                if count > 1:
+                    example = sentence_examples[sentence]
+                    logger.info(f"   重复 {count} 次: {sentence[:80]}...")
+                    logger.info(f"      来源: {example['source']} | 标题: {example['title'][:40]}...")
 
         analysis = {
             'total_items': len(data),
@@ -367,19 +368,6 @@ class FileService:
                     'title': example['title'],
                     'source': example['source']
                 })
-
-        # 记录分析结果
-        logger.info(f"📊 命中句子分析结果:")
-        logger.info(f"   总数据条数: {analysis['total_items']}")
-        logger.info(f"   有命中句子的条数: {analysis['items_with_sentences']}")
-        logger.info(f"   唯一命中句子数: {analysis['unique_sentences']}")
-        logger.info(f"   预期去重率: {analysis['duplication_rate']*100:.1f}%")
-
-        if analysis['most_duplicated']:
-            logger.info(f"🔍 重复次数最多的命中句子:")
-            for dup in analysis['most_duplicated'][:5]:
-                logger.info(f"   重复 {dup['count']} 次: {dup['sentence']}")
-                logger.info(f"      来源: {dup['source']} | 标题: {dup['title']}")
 
         return analysis
     

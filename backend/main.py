@@ -1,12 +1,13 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 import os
 import tempfile
 import asyncio
 from datetime import datetime
-import logging
 import json
+import uuid
 from typing import AsyncGenerator
 
 from schemas import *
@@ -14,32 +15,123 @@ from services.file_service import FileService
 from services.dify_service import DifyService
 from services.report_service import ReportService
 from services.database_service import DatabaseService
+# from services.file_security import FileSecurityValidator  # 临时注释
+from services.cache_service import cache_manager
+from services.cleanup_service import cleanup_service
+from services.logger_config import (
+    system_logger, api_logger, security_logger, file_logger,
+    log_performance, set_request_id, log_stats
+)
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# 应用程序启动
+system_logger.info("南海舆情日报生成系统启动", version="1.0.0")
 
 app = FastAPI(title="南海舆情日报生成系统", version="1.0.0")
+
+# 启动事件：启动后台服务
+@app.on_event("startup")
+async def startup_event():
+    """应用启动事件"""
+    try:
+        # 启动清理服务
+        await cleanup_service.start()
+        system_logger.info("后台服务启动完成")
+    except Exception as e:
+        system_logger.error("后台服务启动失败", error=str(e))
+
+# 关闭事件：清理资源
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭事件"""
+    try:
+        # 停止清理服务
+        await cleanup_service.stop()
+        system_logger.info("后台服务已停止")
+    except Exception as e:
+        system_logger.error("停止后台服务失败", error=str(e))
+
+# 请求中间件：添加请求ID和日志
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    # 生成请求ID
+    request_id = str(uuid.uuid4())
+    set_request_id(request_id)
+
+    start_time = datetime.utcnow()
+
+    # 只记录重要的请求开始（上传、处理等）
+    if request.url.path in ["/api/upload", "/api/cache/clear", "/api/cleanup/manual"]:
+        api_logger.info(
+            f"Request started: {request.method} {request.url.path}",
+            request_id=request_id[:8]  # 只保留前8位
+        )
+
+    try:
+        response = await call_next(request)
+        duration = (datetime.utcnow() - start_time).total_seconds()
+
+        # 只记录重要请求的完成或慢请求
+        if (request.url.path in ["/api/upload", "/api/cache/clear", "/api/cleanup/manual"] or
+            duration > 1.0):  # 超过1秒的请求
+            api_logger.info(
+                f"Request completed: {request.method} {request.url.path}",
+                request_id=request_id[:8],
+                status_code=response.status_code,
+                duration_seconds=round(duration, 2)
+            )
+
+        log_stats.record_request()
+        return response
+
+    except Exception as e:
+        duration = (datetime.utcnow() - start_time).total_seconds()
+
+        # 所有错误都记录
+        api_logger.error(
+            f"Request failed: {request.method} {request.url.path}",
+            request_id=request_id[:8],
+            error_type=type(e).__name__,
+            error_message=str(e),
+            duration_seconds=round(duration, 2)
+        )
+
+        log_stats.record_error(str(e))
+        raise
 
 # 配置CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # React开发服务器
+    allow_origins=os.getenv('CORS_ORIGINS', 'http://localhost:5173,http://localhost:5174').split(','),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# 配置存储目录 - 使用环境变量
+UPLOAD_DIR = os.getenv('UPLOAD_DIR', './uploads')
+REPORTS_DIR = os.getenv('REPORTS_DIR', './reports')
+TEMPLATES_DIR = os.getenv('TEMPLATES_DIR', './templates')
+LOGS_DIR = os.getenv('LOGS_DIR', './logs')
+CACHE_DIR = os.getenv('CACHE_DIR', './cache')
+
 # 创建必要目录
-UPLOAD_DIR = "uploads"
-REPORTS_DIR = "reports"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(REPORTS_DIR, exist_ok=True)
+for directory in [UPLOAD_DIR, REPORTS_DIR, TEMPLATES_DIR, LOGS_DIR, CACHE_DIR]:
+    os.makedirs(directory, exist_ok=True)
+
+system_logger.info(
+    "存储目录配置完成",
+    upload_dir=UPLOAD_DIR,
+    reports_dir=REPORTS_DIR,
+    templates_dir=TEMPLATES_DIR,
+    logs_dir=LOGS_DIR,
+    cache_dir=CACHE_DIR
+)
 
 # 初始化服务
 file_service = FileService()
 report_service = ReportService()
 db_service = DatabaseService()
+file_security = FileSecurityValidator()
 
 # 全局进度存储（实际项目中应该使用Redis等缓存）
 progress_streams = {}
@@ -52,7 +144,83 @@ dify_service = DifyService(api_key=DIFY_API_KEY, base_url=DIFY_BASE_URL)
 
 @app.get("/")
 async def root():
-    return {"message": "南海舆情日报生成系统 API"}
+    system_logger.info("访问根路径")
+    return {"message": "南海舆情日报生成系统 API", "status": "running", "version": "1.0.0"}
+
+@app.get("/api/health")
+async def health_check():
+    """健康检查接口"""
+    try:
+        # 检查数据库连接
+        db_status = "ok"
+        try:
+            await db_service.get_upload_history(limit=1)
+        except Exception as e:
+            db_status = f"error: {str(e)}"
+
+        # 检查目录状态
+        dirs_status = {
+            "upload_dir": os.path.exists(UPLOAD_DIR),
+            "reports_dir": os.path.exists(REPORTS_DIR)
+        }
+
+        health_info = {
+            "status": "healthy",
+            "timestamp": datetime.utcnow().isoformat(),
+            "database": db_status,
+            "directories": dirs_status,
+            "log_stats": log_stats.get_stats()
+        }
+
+        system_logger.info("健康检查完成", **health_info)
+        return health_info
+
+    except Exception as e:
+        system_logger.error("健康检查失败", error=str(e))
+        return {"status": "unhealthy", "error": str(e)}
+
+@app.get("/api/logs/stats")
+async def get_log_stats():
+    """获取日志统计信息"""
+    stats = log_stats.get_stats()
+    system_logger.info("获取日志统计", **stats)
+    return stats
+
+@app.get("/api/cache/stats")
+async def get_cache_stats():
+    """获取缓存统计信息"""
+    stats = cache_manager.get_stats()
+    system_logger.info("获取缓存统计", **stats)
+    return stats
+
+@app.post("/api/cache/clear")
+async def clear_cache(cache_type: str = "all"):
+    """清空缓存"""
+    try:
+        result = await cache_manager.clear(cache_type)
+        system_logger.info("清空缓存", cache_type=cache_type, success=result)
+        return {"success": result, "message": f"已清空 {cache_type} 缓存"}
+    except Exception as e:
+        system_logger.error("清空缓存失败", cache_type=cache_type, error=str(e))
+        raise HTTPException(status_code=500, detail=f"清空缓存失败: {str(e)}")
+
+@app.get("/api/cleanup/stats")
+async def get_cleanup_stats():
+    """获取清理服务统计信息"""
+    stats = cleanup_service.get_stats()
+    system_logger.info("获取清理统计", **{k: v for k, v in stats.items() if k != 'scheduled_jobs'})
+    return stats
+
+@app.post("/api/cleanup/manual")
+async def manual_cleanup(operation: str = "full"):
+    """手动触发清理"""
+    try:
+        result = await cleanup_service.manual_cleanup(operation)
+        system_logger.info("手动清理完成", operation=operation, result=result)
+        return result
+    except Exception as e:
+        system_logger.error("手动清理失败", operation=operation, error=str(e))
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
 
 @app.get("/api/progress-stream/{processing_id}")
 async def get_progress_stream(processing_id: int):
@@ -76,9 +244,6 @@ async def get_progress_stream(processing_id: int):
                     status = await db_service.get_processing_status(processing_id)
 
                     if status:
-                        # 添加调试信息
-                        logger.info(f"SSE查询到状态 - processing_id: {processing_id}, upload_id: {status.upload_id}, step: {status.current_step}, status: {status.status}")
-
                         # 检查进度是否有变化
                         if (status.progress != last_progress or
                             status.current_step != last_step or
@@ -111,7 +276,7 @@ async def get_progress_stream(processing_id: int):
                     await asyncio.sleep(1)  # 每秒检查一次
 
                 except Exception as e:
-                    logger.error(f"进度流错误: {str(e)}")
+                    api_logger.error(f"进度流错误: {str(e)}")
                     yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
                     break
 
@@ -120,7 +285,7 @@ async def get_progress_stream(processing_id: int):
                 yield f"data: {json.dumps({'type': 'timeout', 'message': '进度监听超时'})}\n\n"
 
         except Exception as e:
-            logger.error(f"SSE流错误: {str(e)}")
+            api_logger.error(f"SSE流错误: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(
@@ -136,72 +301,116 @@ async def get_progress_stream(processing_id: int):
     )
 
 @app.post("/api/upload", response_model=UploadResponse)
+@log_performance()
 async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...)
 ):
-    """上传CSV文件并开始处理"""
-
-    # 验证文件类型
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="只支持CSV文件格式")
+    """上传CSV文件并开始处理 - 包含安全验证"""
 
     try:
         # 记录开始时间
         start_time = datetime.now()
-        logger.info(f"开始处理上传文件: {file.filename}")
+        file_logger.info(f"开始处理上传文件: {file.filename}", filename=file.filename)
 
-        # 保存上传的文件
+        # 读取文件内容用于安全验证
+        content = await file.read()
+        file_size = len(content)
+
+        # 1. 安全验证
+        security_logger.info(f"开始文件安全验证: {file.filename}", filename=file.filename, size_bytes=file_size)
+        is_valid, error_message, file_info = file_security.validate_file_upload(content, file.filename)
+
+        if not is_valid:
+            security_logger.warning(
+                f"文件安全验证失败: {file.filename}",
+                filename=file.filename,
+                error=error_message,
+                file_size=file_size
+            )
+            raise HTTPException(status_code=400, detail=f"文件安全验证失败: {error_message}")
+
+        security_logger.info(
+            f"文件安全验证通过: {file.filename}",
+            filename=file.filename,
+            rows_count=file_info.get('rows_count', 0),
+            encoding=file_info.get('encoding', 'unknown'),
+            hash=file_info.get('hash', '')[:16]
+        )
+
+        # 2. 清理文件名并保存
+        clean_filename = file_security.sanitize_filename(file.filename)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        file_path = os.path.join(UPLOAD_DIR, f"{timestamp}_{file.filename}")
+        file_path = os.path.join(UPLOAD_DIR, f"{timestamp}_{clean_filename}")
 
         with open(file_path, "wb") as buffer:
-            content = await file.read()
             buffer.write(content)
 
-        file_size = len(content)
-        logger.info(f"文件保存完成，大小: {file_size} bytes")
+        file_logger.info(
+            f"文件保存完成: {clean_filename}",
+            filename=clean_filename,
+            original_filename=file.filename,
+            size_bytes=file_size,
+            path=file_path
+        )
 
-        # 创建数据库记录
-        logger.info("创建数据库记录...")
-        upload_record = await db_service.create_upload_record(file.filename, file_path, file_size)
+        # 3. 创建数据库记录
+        upload_record = await db_service.create_upload_record(
+            filename=clean_filename,
+            file_path=file_path,
+            file_size=file_size
+        )
         processing_status = await db_service.create_processing_status(upload_record.id, "upload")
 
-        logger.info(f"数据库记录创建完成 - upload_id: {upload_record.id}, processing_id: {processing_status.id}")
-        logger.info(f"处理状态验证 - processing_status.upload_id: {processing_status.upload_id}")
+        api_logger.info(
+            f"数据库记录创建完成",
+            upload_id=upload_record.id,
+            processing_id=processing_status.id
+        )
 
-        # 立即更新初始状态
-        await db_service.update_processing_status(processing_status.id, "upload", "processing", 5.0, "文件上传完成，开始处理...")
+        # 4. 立即更新初始状态
+        await db_service.update_processing_status(
+            processing_status.id,
+            "upload",
+            "processing",
+            5.0,
+            f"文件安全验证通过，开始处理... (行数: {file_info.get('rows_count', 0)})"
+        )
 
-        # 后台处理任务
-        logger.info("添加后台处理任务...")
+        # 5. 后台处理任务
         background_tasks.add_task(
             process_file_background,
             upload_record.id,
             processing_status.id,
             file_path,
-            file.filename
+            clean_filename
         )
 
         # 计算上传耗时
         elapsed = (datetime.now() - start_time).total_seconds()
-        logger.info(f"上传接口处理完成，耗时: {elapsed:.3f}秒，即将返回响应")
+        if elapsed > 2.0:  # 只记录慢上传
+            api_logger.info(
+                f"上传处理耗时较长: {elapsed:.1f}s",
+                upload_id=upload_record.id
+            )
 
         return UploadResponse(
             upload_id=upload_record.id,
             processing_id=processing_status.id,
-            message="文件上传成功，正在处理中..."
+            message=f"文件上传成功，正在处理中... (检测到 {file_info.get('rows_count', 0)} 行数据)"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"文件上传失败: {str(e)}")
+        api_logger.error(f"文件上传失败: {str(e)}", error=str(e), filename=file.filename if file else "unknown")
         raise HTTPException(status_code=500, detail=f"文件上传失败: {str(e)}")
 
 async def process_file_background(upload_id: int, processing_id: int, file_path: str, filename: str):
     """后台文件处理任务 - 集成示例脚本逻辑"""
 
     try:
-        logger.info(f"开始处理文件: {filename}")
+        file_logger.info(f"开始处理文件: {filename}", upload_id=upload_id, processing_id=processing_id)
 
         # 步骤1: 文件上传完成
         await db_service.update_processing_status(processing_id, "upload", "processing", 10.0, f"文件 {filename} 上传成功")
@@ -256,7 +465,7 @@ async def process_file_background(upload_id: int, processing_id: int, file_path:
 
         # 暂时放宽验证条件，避免因Dify模型过载导致的失败
         if not domestic_sources and not foreign_sources:
-            logger.warning("⚠️ Dify返回空数据（可能是模型过载），使用空数据继续流程")
+            file_logger.warning("⚠️ Dify返回空数据（可能是模型过载），使用空数据继续流程", upload_id=upload_id)
             domestic_sources = []
             foreign_sources = []
 
@@ -307,30 +516,30 @@ async def process_file_background(upload_id: int, processing_id: int, file_path:
             })
 
         # 完成处理
-        logger.info(f"🎉 开始最终状态更新 - processing_id: {processing_id}")
+        file_logger.info(f"🎉 开始最终状态更新", processing_id=processing_id, upload_id=upload_id)
         await db_service.update_processing_status(processing_id, "report", "completed", 100.0, "南海舆情日报生成完成")
 
         # 清理临时文件
         try:
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
-                logger.info(f"临时去重文件已清理: {temp_file_path}")
+                file_logger.info(f"临时去重文件已清理: {temp_file_path}")
         except Exception as cleanup_error:
-            logger.warning(f"清理临时文件失败: {cleanup_error}")
+            file_logger.warning(f"清理临时文件失败: {cleanup_error}")
 
-        logger.info(f"文件处理完成: {filename}")
+        file_logger.info(f"文件处理完成: {filename}", upload_id=upload_id)
 
     except Exception as e:
-        logger.error(f"处理文件时发生错误: {str(e)}")
+        file_logger.error(f"处理文件时发生错误: {str(e)}", upload_id=upload_id, error=str(e))
 
         # 清理临时文件（如果存在）
         try:
             temp_file_path = file_path.replace('.csv', '_deduplicated.csv')
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
-                logger.info(f"异常处理中清理临时去重文件: {temp_file_path}")
+                file_logger.info(f"异常处理中清理临时去重文件: {temp_file_path}")
         except Exception as cleanup_error:
-            logger.warning(f"异常处理中清理临时文件失败: {cleanup_error}")
+            file_logger.warning(f"异常处理中清理临时文件失败: {cleanup_error}")
 
         # 获取当前处理状态，用于确定错误发生在哪个步骤
         current_status = await db_service.get_processing_status(processing_id)
@@ -412,6 +621,11 @@ async def download_report(upload_id: int):
         media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         filename=f"nanhai_report_{upload_id}.docx"
     )
+
+# 挂载静态文件目录（前端） - 必须在所有API路由之后
+if os.path.exists("/app/static"):
+    app.mount("/", StaticFiles(directory="/app/static", html=True), name="static")
+    system_logger.info("前端静态文件已挂载: /app/static")
 
 if __name__ == "__main__":
     import multiprocessing

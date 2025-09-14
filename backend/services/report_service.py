@@ -2,20 +2,19 @@ from docxtpl import DocxTemplate
 import datetime
 import os
 from typing import List, Dict, Any
-import logging
+from services.logger_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("report")
 
 class ReportService:
     def __init__(self, template_path: str = None):
         if template_path is None:
-            # 使用相对路径访问 backend/templates 目录下的模板文件
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            backend_dir = os.path.dirname(current_dir)  # 从 backend/services 回到 backend
-            template_path = os.path.join(backend_dir, "templates", "report_template.docx")
-        
+            # 使用环境变量配置的模板目录
+            templates_dir = os.getenv('TEMPLATES_DIR', './templates')
+            template_path = os.path.join(templates_dir, "report_template.docx")
+
         self.template_path = template_path
-        logger.info(f"📄 使用模板文件: {self.template_path}")
+        #logger.info("使用模板文件", template_path=self.template_path)
     
     def generate_report(self, domestic_sources: List[Dict[Any, Any]],
                        foreign_sources: List[Dict[Any, Any]],
@@ -57,9 +56,9 @@ class ReportService:
 
             # 打印调试信息
             logger.info(f"\n📋 模板数据准备完成:")
-            logger.info(f"- 境内条目数: {context['inside_total']}")
-            logger.info(f"- 境外条目数: {context['outside_total']}")
-            logger.info(f"- 报告日期: {context['date']}")
+            #logger.info(f"- 境内条目数: {context['inside_total']}")
+            #logger.info(f"- 境外条目数: {context['outside_total']}")
+            #logger.info(f"- 报告日期: {context['date']}")
 
             # 生成Word文档
             if not os.path.exists(self.template_path):
