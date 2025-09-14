@@ -623,9 +623,18 @@ async def download_report(upload_id: int):
     )
 
 # 挂载静态文件目录（前端） - 必须在所有API路由之后
-if os.path.exists("/app/static"):
-    app.mount("/", StaticFiles(directory="/app/static", html=True), name="static")
+static_dir = "/app/static"
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
     system_logger.info("前端静态文件已挂载: /app/static")
+else:
+    # 尝试本地静态文件目录（开发模式）
+    local_static_dir = "./static"
+    if os.path.exists(local_static_dir):
+        app.mount("/", StaticFiles(directory=local_static_dir, html=True), name="static")
+        system_logger.info("前端静态文件已挂载: ./static")
+    else:
+        system_logger.warning("未找到前端静态文件目录，只提供API服务")
 
 if __name__ == "__main__":
     import multiprocessing
