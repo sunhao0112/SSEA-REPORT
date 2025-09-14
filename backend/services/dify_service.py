@@ -190,6 +190,20 @@ class DifyService:
                                             elif event == 'workflow_finished':
                                                 logger.info("🎉 工作流处理完成")
                                                 final_result = chunk_data
+
+                                                # 检查工作流是否实际成功
+                                                data = chunk_data.get('data', {})
+                                                workflow_status = data.get('status')
+
+                                                if workflow_status == 'failed':
+                                                    error_msg = data.get('error', '未知错误')
+                                                    detailed_error = self._parse_workflow_error({'message': error_msg})
+                                                    logger.error(f"❌ 工作流执行失败: {detailed_error}")
+                                                    return {'error': detailed_error, 'error_data': data, 'raw_error': error_msg}
+                                                elif workflow_status in ['running', 'pending']:
+                                                    logger.warning(f"⚠️ 工作流未完成，状态: {workflow_status}")
+                                                    return {'error': f'工作流未完成，当前状态: {workflow_status}', 'status': workflow_status}
+
                                                 break
 
                                             elif event == 'error':
@@ -262,24 +276,81 @@ class DifyService:
                 logger.error("❌ workflow_result 为空")
                 return None, None
 
+            # 记录完整的工作流结果结构以便调试
+            logger.info(f"📋 工作流结果结构: {list(workflow_result.keys())}")
+
             data = workflow_result.get('data')
             if not data:
                 logger.error("❌ workflow_result 中没有 'data' 字段")
+                logger.error(f"❌ 可用字段: {list(workflow_result.keys())}")
                 return None, None
+
+            # 记录data结构
+            logger.info(f"📋 data 字段结构: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+
+            # 检查工作流状态
+            workflow_status = data.get('status')
+            if workflow_status:
+                logger.info(f"🔄 工作流状态: {workflow_status}")
+
+                if workflow_status == 'failed':
+                    error_msg = data.get('error', '未知错误')
+                    logger.error(f"❌ 工作流执行失败: {error_msg}")
+                    return None, None
+                elif workflow_status == 'running':
+                    logger.warning("⚠️ 工作流仍在运行中，可能未完成")
+                    return None, None
+                elif workflow_status != 'succeeded':
+                    logger.warning(f"⚠️ 工作流状态异常: {workflow_status}")
 
             outputs = data.get('outputs')
             if not outputs:
                 logger.error("❌ data 中没有 'outputs' 字段")
-                return None, None
+                logger.error(f"❌ data 中可用字段: {list(data.keys()) if isinstance(data, dict) else 'data不是字典类型'}")
+
+                # 检查是否有其他可能的输出字段
+                possible_output_fields = ['output', 'result', 'response', 'content']
+                for field in possible_output_fields:
+                    if field in data:
+                        logger.info(f"🔍 发现可能的输出字段: {field}")
+                        outputs = data[field]
+                        break
+
+                if not outputs:
+                    return None, None
+
+            # 记录outputs结构
+            logger.info(f"📋 outputs 字段结构: {list(outputs.keys()) if isinstance(outputs, dict) else type(outputs)}")
 
             structured_output = outputs.get('structured_output')
             if not structured_output:
                 logger.error("❌ outputs 中没有 'structured_output' 字段")
-                return None, None
+                logger.error(f"❌ outputs 中可用字段: {list(outputs.keys()) if isinstance(outputs, dict) else 'outputs不是字典类型'}")
 
-            domestic_sources = structured_output.get('domestic_sources', [])
-            foreign_sources = structured_output.get('foreign_sources', [])
+                # 尝试其他可能的结构化输出字段名
+                possible_structured_fields = ['structured_data', 'parsed_output', 'analysis_result', 'classification']
+                for field in possible_structured_fields:
+                    if field in outputs:
+                        logger.info(f"🔍 发现可能的结构化输出字段: {field}")
+                        structured_output = outputs[field]
+                        break
 
+                if not structured_output:
+                    # 如果没有结构化输出，尝试直接从outputs获取
+                    if 'domestic_sources' in outputs or 'foreign_sources' in outputs:
+                        logger.info("🔍 直接从outputs获取数据源")
+                        domestic_sources = outputs.get('domestic_sources', [])
+                        foreign_sources = outputs.get('foreign_sources', [])
+                    else:
+                        return None, None
+                else:
+                    domestic_sources = structured_output.get('domestic_sources', [])
+                    foreign_sources = structured_output.get('foreign_sources', [])
+            else:
+                domestic_sources = structured_output.get('domestic_sources', [])
+                foreign_sources = structured_output.get('foreign_sources', [])
+
+            # 记录最终结果
             logger.info(f"✅ 数据提取成功:")
             logger.info(f"- 境内条目数: {len(domestic_sources) if domestic_sources else 0}")
             logger.info(f"- 境外条目数: {len(foreign_sources) if foreign_sources else 0}")
@@ -288,6 +359,7 @@ class DifyService:
 
         except Exception as e:
             logger.error(f"❌ 提取数据源时发生错误: {str(e)}")
+            logger.error(f"❌ 完整工作流结果: {workflow_result}")
             return None, None
 
     def _parse_workflow_error(self, error_data: dict) -> str:
