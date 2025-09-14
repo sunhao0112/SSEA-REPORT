@@ -193,9 +193,10 @@ class DifyService:
                                                 break
 
                                             elif event == 'error':
-                                                error_msg = chunk_data.get('data', {}).get('message', '未知错误')
-                                                logger.error(f"❌ 处理过程中出现错误: {error_msg}")
-                                                return None
+                                                error_data = chunk_data.get('data', {})
+                                                detailed_error = self._parse_workflow_error(error_data)
+                                                logger.error(f"❌ 工作流处理过程中出现错误: {detailed_error}")
+                                                return {'error': detailed_error, 'error_data': error_data}
 
                                         except json.JSONDecodeError as e:
                                             logger.warning(f"⚠️ 解析流数据失败 (行长度: {len(json_str)}): {str(e)[:100]}...")
@@ -215,10 +216,11 @@ class DifyService:
 
                     else:
                         error_text = await response.text()
+                        detailed_error = self._parse_http_error(response.status, error_text)
                         logger.error(f"❌ 工作流执行失败")
                         logger.error(f"状态码: {response.status}")
-                        logger.error(f"错误详情: {error_text}")
-                        return None
+                        logger.error(f"详细错误: {detailed_error}")
+                        return {'error': detailed_error, 'status_code': response.status, 'raw_error': error_text}
 
         except Exception as e:
             logger.error(f"❌ 执行工作流时发生错误: {str(e)}")
@@ -232,13 +234,17 @@ class DifyService:
         file_id = await self.upload_file_async(file_path, filename)
         if not file_id:
             logger.error(f"❌ 文件上传失败")
-            return None
+            return {'error': '文件上传到Dify失败，请检查网络连接或文件格式'}
 
         # 运行工作流
         workflow_result = await self.run_workflow_async(file_id)
         if not workflow_result:
             logger.error(f"❌ 文件工作流执行失败")
-            return None
+            return {'error': '工作流执行失败，可能是网络连接问题或API服务不可用'}
+
+        # 如果结果本身就是错误，直接返回
+        if isinstance(workflow_result, dict) and 'error' in workflow_result:
+            return workflow_result
 
         logger.info(f"✅ 文件异步处理完成")
         return workflow_result
@@ -246,6 +252,11 @@ class DifyService:
     def extract_sources_from_result(self, workflow_result: Dict[Any, Any]) -> Tuple[Optional[list], Optional[list]]:
         """从工作流结果中提取境内外数据源"""
         try:
+            # 检查是否是错误结果
+            if 'error' in workflow_result:
+                logger.error(f"❌ 工作流返回错误: {workflow_result['error']}")
+                return None, None
+
             # 安全地检查每一级是否存在
             if not workflow_result:
                 logger.error("❌ workflow_result 为空")
@@ -278,3 +289,162 @@ class DifyService:
         except Exception as e:
             logger.error(f"❌ 提取数据源时发生错误: {str(e)}")
             return None, None
+
+    def _parse_workflow_error(self, error_data: dict) -> str:
+        """解析工作流错误信息，提供详细的用户友好错误描述"""
+        try:
+            # 获取基础错误信息
+            message = error_data.get('message', '未知错误')
+            error_type = error_data.get('error_type', '未知类型')
+
+            # 尝试解析嵌套的错误信息
+            if 'PluginInvokeError' in message:
+                # 解析插件调用错误
+                return self._parse_plugin_error(message)
+
+            # 检查常见的API错误模式
+            if '429' in message or 'RESOURCE_EXHAUSTED' in message:
+                return self._parse_quota_error(message)
+            elif '401' in message or 'unauthorized' in message.lower():
+                return "API认证失败：请检查API密钥是否正确配置"
+            elif '403' in message or 'forbidden' in message.lower():
+                return "API访问被拒绝：权限不足或API密钥无效"
+            elif '500' in message or 'internal server error' in message.lower():
+                return "API服务内部错误：建议稍后重试"
+            elif 'timeout' in message.lower():
+                return "请求超时：数据量可能过大或网络连接不稳定"
+            elif 'connection' in message.lower():
+                return "网络连接错误：无法连接到API服务"
+
+            # 返回原始错误信息（如果无法解析）
+            return f"{error_type}: {message}"
+
+        except Exception as e:
+            logger.warning(f"解析工作流错误失败: {e}")
+            return str(error_data)
+
+    def _parse_plugin_error(self, message: str) -> str:
+        """解析插件调用错误"""
+        try:
+            # 查找JSON部分
+            if 'PluginInvokeError: {' in message:
+                json_start = message.find('PluginInvokeError: {') + len('PluginInvokeError: ')
+                json_part = message[json_start:]
+
+                # 尝试解析JSON（可能被截断）
+                try:
+                    # 找到完整的JSON结构
+                    brace_count = 0
+                    json_end = 0
+                    for i, char in enumerate(json_part):
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                json_end = i + 1
+                                break
+
+                    if json_end > 0:
+                        json_str = json_part[:json_end]
+                        error_obj = json.loads(json_str)
+                        return self._parse_plugin_error_object(error_obj)
+
+                except json.JSONDecodeError:
+                    pass
+
+            # 如果无法解析JSON，查找关键信息
+            if '429 RESOURCE_EXHAUSTED' in message:
+                return self._parse_quota_error(message)
+
+            return f"插件调用错误: {message[:200]}..."
+
+        except Exception as e:
+            logger.warning(f"解析插件错误失败: {e}")
+            return f"插件调用错误: {message[:200]}..."
+
+    def _parse_plugin_error_object(self, error_obj: dict) -> str:
+        """解析插件错误对象"""
+        error_type = error_obj.get('error_type', '未知类型')
+        message = error_obj.get('message', '未知错误')
+
+        if error_type == 'ClientError' and '429' in message:
+            return self._parse_quota_error(message)
+        elif error_type == 'ClientError' and '401' in message:
+            return "API认证错误：请检查Google Gemini API密钥配置"
+        elif error_type == 'ClientError' and '403' in message:
+            return "API访问被禁止：请检查API密钥权限或项目配置"
+        elif error_type == 'ClientError':
+            return f"API客户端错误: {message[:200]}..."
+        else:
+            return f"{error_type}: {message[:200]}..."
+
+    def _parse_quota_error(self, message: str) -> str:
+        """解析配额错误，提供具体的解决建议"""
+        try:
+            # 检查具体的配额类型
+            if 'generate_content_free_tier_input_token_count' in message:
+                if 'GenerateContentInputTokensPerModelPerMinute-FreeTier' in message:
+                    return ("Google Gemini API 免费配额已用完（每分钟250,000 tokens限制）\n"
+                           "建议解决方案：\n"
+                           "1. 等待1分钟后重试\n"
+                           "2. 减少单次处理的数据量\n"
+                           "3. 升级到付费版本以获得更高配额")
+                else:
+                    return ("Google Gemini API 配额不足\n"
+                           "请检查您的API配额限制或升级计划")
+            elif 'quota' in message.lower() or '配额' in message:
+                return ("API配额已达上限\n"
+                       "建议：等待配额重置或联系API提供商升级服务")
+            elif '429' in message:
+                return ("API请求频率过高（429错误）\n"
+                       "建议：等待几分钟后重试，或减少并发请求数量")
+            else:
+                return f"配额限制错误: {message[:200]}..."
+
+        except Exception as e:
+            return "API配额错误：请稍后重试或联系系统管理员"
+
+    def _parse_http_error(self, status_code: int, error_text: str) -> str:
+        """解析HTTP错误响应"""
+        try:
+            # 尝试解析JSON错误响应
+            try:
+                error_obj = json.loads(error_text)
+                if isinstance(error_obj, dict):
+                    # 检查是否是工作流错误响应
+                    if 'data' in error_obj and 'error' in error_obj['data']:
+                        return self._parse_workflow_error(error_obj['data'])
+                    elif 'message' in error_obj:
+                        return f"API错误: {error_obj['message']}"
+                    elif 'error' in error_obj:
+                        if isinstance(error_obj['error'], str):
+                            return f"API错误: {error_obj['error']}"
+                        elif isinstance(error_obj['error'], dict):
+                            error_msg = error_obj['error'].get('message', str(error_obj['error']))
+                            return f"API错误: {error_msg}"
+            except json.JSONDecodeError:
+                pass
+
+            # 根据HTTP状态码提供友好错误信息
+            if status_code == 400:
+                return f"请求参数错误 (400): {error_text[:200]}..."
+            elif status_code == 401:
+                return "API认证失败 (401)：请检查API密钥配置"
+            elif status_code == 403:
+                return "API访问被禁止 (403)：权限不足或API密钥无效"
+            elif status_code == 429:
+                return "API请求频率过高 (429)：请等待后重试"
+            elif status_code == 500:
+                return "API服务内部错误 (500)：建议稍后重试"
+            elif status_code == 502:
+                return "API网关错误 (502)：服务暂时不可用"
+            elif status_code == 503:
+                return "API服务不可用 (503)：服务器维护中"
+            elif status_code == 504:
+                return "API请求超时 (504)：数据处理时间过长"
+            else:
+                return f"HTTP错误 ({status_code}): {error_text[:200]}..."
+
+        except Exception as e:
+            return f"HTTP错误 ({status_code}): 无法解析错误详情"

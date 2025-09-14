@@ -471,6 +471,18 @@ async def process_file_background(upload_id: int, processing_id: int, file_path:
         if not workflow_result:
             raise Exception("Dify工作流处理失败")
 
+        # 检查是否是错误结果
+        if isinstance(workflow_result, dict) and 'error' in workflow_result:
+            detailed_error = workflow_result.get('error', '未知错误')
+            await db_service.update_processing_status(
+                processing_id,
+                "workflow",
+                "failed",
+                60.0,
+                f"Dify工作流处理失败: {detailed_error}"
+            )
+            raise Exception(f"Dify工作流处理失败: {detailed_error}")
+
         # 提取境内外数据源
         domestic_sources, foreign_sources = dify_service.extract_sources_from_result(workflow_result)
 

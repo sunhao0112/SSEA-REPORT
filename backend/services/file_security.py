@@ -225,7 +225,7 @@ class FileSecurityValidator:
             return False, f"内容安全验证失败: {str(e)}", content_info
 
     def _validate_csv_format(self, file_content: bytes) -> Tuple[bool, str, Dict[str, Any]]:
-        """CSV 格式验证"""
+        """CSV 格式验证 - 增强健壮性处理大文件和格式问题"""
         csv_info = {
             'rows_count': 0,
             'columns_count': 0,
@@ -236,9 +236,11 @@ class FileSecurityValidator:
         try:
             # 解码文件内容
             text_content = ""
+            encoding_used = 'utf-8'
             for encoding in ['utf-8-sig', 'utf-8', 'gbk', 'latin1']:
                 try:
                     text_content = file_content.decode(encoding)
+                    encoding_used = encoding
                     break
                 except UnicodeDecodeError:
                     continue
@@ -246,59 +248,104 @@ class FileSecurityValidator:
             if not text_content:
                 return False, "无法解码CSV文件", csv_info
 
-            # 使用pandas验证CSV格式，添加宽松的解析选项
+            # 预处理：检查文件是否过大或有明显问题
+            lines = text_content.split('\n')
+            if len(lines) > self.MAX_ROWS:
+                return False, f"CSV文件行数过多 ({len(lines)} 行，最大允许 {self.MAX_ROWS} 行)", csv_info
+
+            # 检查单行长度是否过长（防止buffer overflow）
+            non_empty_lines = [line for line in lines[:100] if line.strip()]  # 只检查前100行且非空
+            if non_empty_lines:  # 确保有数据
+                max_line_length = max(len(line) for line in non_empty_lines)
+                if max_line_length > 1000000:  # 1MB per line limit
+                    return False, "CSV文件包含过长的数据行，可能存在格式问题", csv_info
+
+            # 分阶段验证：先用宽松模式检查基本格式
             try:
-                # 使用更宽松的CSV解析参数
-                df = pd.read_csv(
-                    io.StringIO(text_content),
-                    on_bad_lines='skip',  # 跳过格式错误的行
-                    skipinitialspace=True,
-                    dtype=str,  # 将所有列都读取为字符串避免类型错误
-                    encoding_errors='ignore'  # 忽略编码错误
-                )
-                csv_info['rows_count'] = len(df)
-                csv_info['columns_count'] = len(df.columns)
-                csv_info['headers'] = df.columns.tolist()
+                # 阶段1：使用csv模块进行初步验证（更健壮）
+                csv_reader = csv.reader(io.StringIO(text_content[:10000]))  # 只检查前10KB
+                headers = next(csv_reader, None)
+                if not headers:
+                    return False, "CSV文件缺少表头", csv_info
 
-                # 获取前5行样本数据
-                sample_rows = min(5, len(df))
-                csv_info['sample_data'] = df.head(sample_rows).to_dict('records')
+                csv_info['headers'] = [str(h).strip() for h in headers]
+                csv_info['columns_count'] = len(headers)
 
-                # 验证行数限制
-                if csv_info['rows_count'] > self.MAX_ROWS:
-                    return False, f"CSV文件行数超出限制 (最大 {self.MAX_ROWS} 行)", csv_info
+                # 计算实际行数（排除空行）
+                valid_lines = [line for line in lines if line.strip()]
+                csv_info['rows_count'] = max(0, len(valid_lines) - 1)  # 减去表头行
 
-                # 验证是否有数据
-                if csv_info['rows_count'] == 0:
-                    return False, "CSV文件没有数据行", csv_info
+                logger.info(f"CSV初步验证通过: {csv_info['rows_count']} 行, {csv_info['columns_count']} 列")
 
-                return True, "", csv_info
+            except Exception as csv_error:
+                logger.warning(f"CSV初步验证失败，尝试pandas解析: {str(csv_error)}")
 
-            except pd.errors.EmptyDataError:
-                return False, "CSV文件为空或格式错误", csv_info
-            except pd.errors.ParserError as e:
-                # 尝试使用更宽松的解析方式
+                # 阶段2：使用pandas进行更详细的验证，但增加更多保护措施
                 try:
+                    # 使用最宽松的pandas设置
                     df = pd.read_csv(
                         io.StringIO(text_content),
-                        on_bad_lines='warn',  # 警告但不停止
+                        on_bad_lines='skip',  # 跳过格式错误的行
                         skipinitialspace=True,
-                        dtype=str,
+                        dtype=str,  # 强制字符串类型避免类型转换问题
+                        encoding_errors='ignore',  # 忽略编码错误
+                        engine='python',  # 使用Python引擎，更宽松
                         sep=None,  # 自动检测分隔符
-                        engine='python'  # 使用Python引擎，更宽松
+                        low_memory=False,  # 避免内存不足
+                        nrows=self.MAX_ROWS,  # 限制读取行数
+                        chunksize=None,  # 不分块读取
+                        error_bad_lines=False,  # pandas旧版本兼容
+                        warn_bad_lines=False,  # 不输出警告
+                        quoting=csv.QUOTE_MINIMAL,  # 最小引用模式
+                        doublequote=True,  # 允许双引号转义
+                        escapechar=None,  # 不使用转义字符
                     )
+
                     csv_info['rows_count'] = len(df)
                     csv_info['columns_count'] = len(df.columns)
                     csv_info['headers'] = df.columns.tolist()
 
-                    sample_rows = min(5, len(df))
-                    csv_info['sample_data'] = df.head(sample_rows).to_dict('records')
+                    # 获取样本数据（防止内存溢出）
+                    sample_rows = min(3, len(df))
+                    if sample_rows > 0:
+                        csv_info['sample_data'] = df.head(sample_rows).to_dict('records')
 
-                    return True, f"CSV解析成功，但有格式警告: {str(e)}", csv_info
-                except Exception:
+                except pd.errors.ParserError as pe:
+                    # 如果pandas也失败，使用最基础的行数统计
+                    logger.warning(f"pandas解析失败，使用基础验证: {str(pe)}")
+
+                    # 基础验证：至少确保文件是文本格式且有内容
+                    non_empty_lines = [line for line in lines if line.strip()]
+                    if len(non_empty_lines) < 2:  # 至少要有表头和一行数据
+                        return False, "CSV文件内容不足（需要至少2行有效数据）", csv_info
+
+                    # 检查第一行是否像表头
+                    first_line = non_empty_lines[0]
+                    if ',' not in first_line and ';' not in first_line and '\t' not in first_line:
+                        return False, "CSV文件格式错误：无法识别分隔符", csv_info
+
+                    # 估算信息
+                    csv_info['rows_count'] = len(non_empty_lines) - 1
+                    csv_info['columns_count'] = len(first_line.split(',')) if ',' in first_line else len(first_line.split(';'))
+                    csv_info['headers'] = [f"Column_{i+1}" for i in range(csv_info['columns_count'])]
+
+                    logger.info(f"使用基础验证通过CSV: {csv_info['rows_count']} 行（估算）")
+
+                except Exception as e:
                     return False, f"CSV格式解析错误: {str(e)}", csv_info
 
+            # 最终验证
+            if csv_info['rows_count'] == 0:
+                return False, "CSV文件没有数据行", csv_info
+
+            if csv_info['columns_count'] == 0:
+                return False, "CSV文件没有有效列", csv_info
+
+            logger.info(f"CSV验证完成: {csv_info['rows_count']} 行, {csv_info['columns_count']} 列")
+            return True, "", csv_info
+
         except Exception as e:
+            logger.error(f"CSV格式验证异常: {str(e)}")
             return False, f"CSV格式验证失败: {str(e)}", csv_info
 
     def generate_file_hash(self, file_content: bytes) -> str:
