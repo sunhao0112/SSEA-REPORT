@@ -1,6 +1,7 @@
 from docxtpl import DocxTemplate
 import datetime
 import os
+import html
 from typing import List, Dict, Any
 from services.logger_config import get_logger
 
@@ -15,6 +16,17 @@ class ReportService:
 
         self.template_path = template_path
         #logger.info("使用模板文件", template_path=self.template_path)
+
+    def _escape_urls_in_sources(self, sources: List[Dict[Any, Any]]) -> List[Dict[Any, Any]]:
+        """对数据源中的URL进行转义处理，防止docxtpl处理时出现问题"""
+        escaped_sources = []
+        for source in sources:
+            escaped_source = source.copy()
+            if 'links' in escaped_source and isinstance(escaped_source['links'], list):
+                # 对每个链接进行HTML转义
+                escaped_source['links'] = [html.escape(link) for link in escaped_source['links']]
+            escaped_sources.append(escaped_source)
+        return escaped_sources
     
     def generate_report(self, domestic_sources: List[Dict[Any, Any]],
                        foreign_sources: List[Dict[Any, Any]],
@@ -31,6 +43,10 @@ class ReportService:
             if not foreign_sources:
                 logger.error("❌ 境外数据提取失败，程序终止")
                 return False
+
+            # 对URL进行转义处理
+            domestic_sources = self._escape_urls_in_sources(domestic_sources)
+            foreign_sources = self._escape_urls_in_sources(foreign_sources)
 
             # 准备模板数据
             today = datetime.date.today()
