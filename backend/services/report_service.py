@@ -73,9 +73,9 @@ class ReportService:
 
             # 打印调试信息
             logger.info("模板数据准备完成")
-            #logger.info(f"- 境内条目数: {context['inside_total']}")
-            #logger.info(f"- 境外条目数: {context['outside_total']}")
-            #logger.info(f"- 报告日期: {context['date']}")
+            logger.info(f"- 境内条目数: {context['inside_total']}")
+            logger.info(f"- 境外条目数: {context['outside_total']}")
+            logger.info(f"- 报告日期: {context['date']}")
 
             # 生成Word文档
             if not os.path.exists(self.template_path):

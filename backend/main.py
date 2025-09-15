@@ -667,6 +667,7 @@ async def generate_report_from_json(
 
     try:
         api_logger.info("开始处理手动JSON数据生成报告")
+        api_logger.info(f"接收到的参数: inside_total={inside_total}, outside_total={outside_total}")
 
         # 验证数据
         if not request.domestic_sources and not request.foreign_sources:
