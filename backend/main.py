@@ -662,9 +662,10 @@ async def generate_report_from_json(request: ManualReportRequest):
         if not request.domestic_sources and not request.foreign_sources:
             raise HTTPException(status_code=400, detail="domestic_sources和foreign_sources不能都为空")
 
-        # 生成报告文件名
+        # 生成报告文件名 - 使用英文避免编码问题
         current_time = datetime.now()
-        filename = f"南海舆情日报_{current_time.strftime('%Y年%m月%d日_%H%M%S')}.docx"
+        filename = f"nanhai_report_{current_time.strftime('%Y%m%d_%H%M%S')}.docx"
+        display_filename = f"南海舆情日报_{current_time.strftime('%Y年%m月%d日_%H%M%S')}.docx"
 
         # 确保reports目录存在
         reports_dir = "reports"
@@ -690,11 +691,14 @@ async def generate_report_from_json(request: ManualReportRequest):
         api_logger.info(f"手动报告生成成功: {filename}")
 
         # 返回文件供下载
+        import urllib.parse
+        encoded_filename = urllib.parse.quote(display_filename.encode('utf-8'))
+
         return FileResponse(
             report_path,
             media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            filename=filename,
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
+            filename=display_filename,
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
         )
 
     except HTTPException:

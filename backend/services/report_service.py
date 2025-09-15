@@ -50,14 +50,15 @@ class ReportService:
 
             # 准备模板数据
             today = datetime.date.today()
-            date_text = today.strftime('%Y年%#m月%#d日')
+            date_text = today.strftime('%Y年%m月%d日')
 
             one_day = datetime.timedelta(days=1)
             previous_day = today - one_day
-            previous_date_text = previous_day.strftime('%Y年%#m月%#d日')
+            previous_date_text = previous_day.strftime('%Y年%m月%d日')
 
             if not output_filename:
-                output_filename = f"舆情日报_{date_text}.docx"
+                # 使用英文文件名避免编码问题
+                output_filename = f"nanhai_report_{today.strftime('%Y%m%d')}.docx"
 
             # 确保所有字段都是正确的类型
             context = {
@@ -71,25 +72,25 @@ class ReportService:
             }
 
             # 打印调试信息
-            logger.info(f"\n📋 模板数据准备完成:")
+            logger.info("模板数据准备完成")
             #logger.info(f"- 境内条目数: {context['inside_total']}")
             #logger.info(f"- 境外条目数: {context['outside_total']}")
             #logger.info(f"- 报告日期: {context['date']}")
 
             # 生成Word文档
             if not os.path.exists(self.template_path):
-                logger.error(f"❌ 模板文件 {self.template_path} 不存在")
+                logger.error(f"模板文件 {self.template_path} 不存在")
                 return False
 
             doc = DocxTemplate(self.template_path)
             doc.render(context)
             doc.save(output_filename)
-            logger.info(f"\n✅ 报告生成成功: {output_filename}")
+            logger.info(f"报告生成成功: {output_filename}")
             logger.info("=" * 60)
             return True
             
         except Exception as e:
-            logger.error(f"\n❌ 生成Word文档时发生错误: {str(e)}")
+            logger.error(f"生成Word文档时发生错误: {str(e)}")
             import traceback
             traceback.print_exc()
             return False
