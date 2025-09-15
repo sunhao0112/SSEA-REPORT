@@ -652,8 +652,18 @@ async def download_report(upload_id: int):
     )
 
 @app.post("/api/generate-report-from-json")
-async def generate_report_from_json(request: ManualReportRequest):
-    """从手动粘贴的JSON数据生成报告"""
+async def generate_report_from_json(
+    request: ManualReportRequest,
+    inside_total: int = None,
+    outside_total: int = None
+):
+    """从手动粘贴的JSON数据生成报告
+
+    Args:
+        request: 包含domestic_sources和foreign_sources的JSON数据
+        inside_total: 可选，境内数据总数，如不提供则使用domestic_sources数组长度
+        outside_total: 可选，境外数据总数，如不提供则使用foreign_sources数组长度
+    """
 
     try:
         api_logger.info("开始处理手动JSON数据生成报告")
@@ -679,6 +689,8 @@ async def generate_report_from_json(request: ManualReportRequest):
         success = report_service.generate_report(
             domestic_sources=request.domestic_sources,
             foreign_sources=request.foreign_sources,
+            inside_total=inside_total,
+            outside_total=outside_total,
             output_filename=report_path
         )
 
