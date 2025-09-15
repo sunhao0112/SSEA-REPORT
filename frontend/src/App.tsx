@@ -3,6 +3,7 @@ import { FileUpload } from './components/FileUpload';
 import { ProcessingStatus } from './components/ProcessingStatus';
 import { DataPreview } from './components/DataPreview';
 import { ReportHistory } from './components/ReportHistory';
+import { ManualProcess } from './components/ManualProcess';
 import { apiService, ProcessingStatusResponse, DataStatsResponse } from './services/api';
 import { CacheService } from './services/cacheService';
 import './App.css';
@@ -26,6 +27,7 @@ interface DataStats {
 }
 
 function App() {
+  const [currentPage, setCurrentPage] = useState<'home' | 'manual'>('home');
   const [processingState, setProcessingState] = useState<ProcessingState>({
     currentStep: 'idle',
     status: 'idle',
@@ -257,74 +259,86 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* 顶部导航栏 */}
-      <header className="bg-blue-900 text-white shadow-lg w-full">
-        <div className="w-full px-4 md:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-lg">南</span>
+    <>
+      {currentPage === 'home' ? (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+          {/* 顶部导航栏 */}
+          <header className="bg-blue-900 text-white shadow-lg w-full">
+            <div className="w-full px-4 md:px-6 lg:px-8 py-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+                    <span className="text-white font-bold text-lg">南</span>
+                  </div>
+                  <h1 className="text-xl font-bold">南海舆情日报生成系统</h1>
+                </div>
+                <div className="flex items-center space-x-4">
+                  <button
+                    onClick={() => setShowHistory(!showHistory)}
+                    className={`text-blue-200 hover:text-white transition-colors ${showHistory ? 'text-white' : ''}`}
+                  >
+                    历史记录
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage('manual')}
+                    className="text-blue-200 hover:text-white transition-colors"
+                  >
+                    半自动流程
+                  </button>
+                  <button className="text-blue-200 hover:text-white transition-colors">
+                    帮助文档
+                  </button>
+                  <div className="w-8 h-8 bg-blue-700 rounded-full flex items-center justify-center">
+                    <span className="text-sm">用</span>
+                  </div>
+                </div>
               </div>
-              <h1 className="text-xl font-bold">南海舆情日报生成系统</h1>
             </div>
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => setShowHistory(!showHistory)}
-                className={`text-blue-200 hover:text-white transition-colors ${showHistory ? 'text-white' : ''}`}
-              >
-                历史记录
-              </button>
-              <button className="text-blue-200 hover:text-white transition-colors">
-                帮助文档
-              </button>
-              <div className="w-8 h-8 bg-blue-700 rounded-full flex items-center justify-center">
-                <span className="text-sm">用</span>
+          </header>
+
+          {/* 主要内容区域 */}
+          <main className="px-4 md:px-6 lg:px-8 py-8 w-full">
+            <div className="max-w-5xl mx-auto space-y-8">
+              {/* 历史记录部分 */}
+              {showHistory && (
+                <ReportHistory onRefresh={() => {}} />
+              )}
+
+              {/* 文件上传和处理状态 */}
+              <div className="w-full">
+                <FileUpload onFileUpload={handleFileUpload} />
+
+                {/* 处理状态面板 */}
+                {processingState.status !== 'idle' && (
+                  <div className="mt-6">
+                    <ProcessingStatus
+                      currentStep={processingState.currentStep}
+                      status={processingState.status}
+                      progress={processingState.progress}
+                      message={processingState.message}
+                      errorMessage={processingState.errorMessage}
+                    />
+                  </div>
+                )}
               </div>
+
+              {/* 数据统计预览 */}
+              {(processingState.status === 'completed' || reportReady) && (
+                <div className="w-full">
+                  <DataPreview
+                    stats={dataStats}
+                    reportReady={reportReady}
+                    onDownloadReport={handleDownloadReport}
+                  />
+                </div>
+              )}
             </div>
-          </div>
+          </main>
         </div>
-      </header>
-
-      {/* 主要内容区域 */}
-      <main className="px-4 md:px-6 lg:px-8 py-8 w-full">
-        <div className="max-w-5xl mx-auto space-y-8">
-          {/* 历史记录部分 */}
-          {showHistory && (
-            <ReportHistory onRefresh={() => {}} />
-          )}
-
-          {/* 文件上传和处理状态 */}
-          <div className="w-full">
-            <FileUpload onFileUpload={handleFileUpload} />
-
-            {/* 处理状态面板 */}
-            {processingState.status !== 'idle' && (
-              <div className="mt-6">
-                <ProcessingStatus
-                  currentStep={processingState.currentStep}
-                  status={processingState.status}
-                  progress={processingState.progress}
-                  message={processingState.message}
-                  errorMessage={processingState.errorMessage}
-                />
-              </div>
-            )}
-          </div>
-
-          {/* 数据统计预览 */}
-          {(processingState.status === 'completed' || reportReady) && (
-            <div className="w-full">
-              <DataPreview
-                stats={dataStats}
-                reportReady={reportReady}
-                onDownloadReport={handleDownloadReport}
-              />
-            </div>
-          )}
-        </div>
-      </main>
-    </div>
+      ) : (
+        <ManualProcess onBackToHome={() => setCurrentPage('home')} />
+      )}
+    </>
   );
 }
 

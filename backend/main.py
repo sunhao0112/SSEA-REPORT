@@ -651,6 +651,58 @@ async def download_report(upload_id: int):
         filename=f"nanhai_report_{upload_id}.docx"
     )
 
+@app.post("/api/generate-report-from-json")
+async def generate_report_from_json(request: ManualReportRequest):
+    """从手动粘贴的JSON数据生成报告"""
+
+    try:
+        api_logger.info("开始处理手动JSON数据生成报告")
+
+        # 验证数据
+        if not request.domestic_sources and not request.foreign_sources:
+            raise HTTPException(status_code=400, detail="domestic_sources和foreign_sources不能都为空")
+
+        # 生成报告文件名
+        current_time = datetime.now()
+        filename = f"南海舆情日报_{current_time.strftime('%Y年%m月%d日_%H%M%S')}.docx"
+
+        # 确保reports目录存在
+        reports_dir = "reports"
+        os.makedirs(reports_dir, exist_ok=True)
+
+        # 完整的文件路径
+        report_path = os.path.join(reports_dir, filename)
+
+        # 创建报告服务并生成报告
+        report_service = ReportService()
+        success = report_service.generate_report(
+            domestic_sources=request.domestic_sources,
+            foreign_sources=request.foreign_sources,
+            output_filename=report_path
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="报告生成失败")
+
+        if not os.path.exists(report_path):
+            raise HTTPException(status_code=500, detail="报告文件未生成")
+
+        api_logger.info(f"手动报告生成成功: {filename}")
+
+        # 返回文件供下载
+        return FileResponse(
+            report_path,
+            media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            filename=filename,
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"手动生成报告失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"生成报告失败: {str(e)}")
+
 # 挂载静态文件目录（前端） - 必须在所有API路由之后
 static_dir = "/app/static"
 if os.path.exists(static_dir):

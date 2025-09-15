@@ -49,3 +49,12 @@ class UploadHistoryItem(BaseModel):
 class UploadHistoryResponse(BaseModel):
     uploads: List[UploadHistoryItem]
     total: int
+
+class ManualReportRequest(BaseModel):
+    domestic_sources: List[Dict[str, Any]]
+    foreign_sources: List[Dict[str, Any]]
+
+class ManualReportResponse(BaseModel):
+    success: bool
+    message: str
+    filename: Optional[str] = None
