@@ -43,7 +43,7 @@ export function ManualProcess({ onBackToHome }: ManualProcessProps) {
       }
 
       // 调用后端API生成报告
-      const response = await fetch('http://localhost:8000/api/generate-report-from-json', {
+      const response = await fetch('/api/generate-report-from-json', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
